@@ -274,6 +274,33 @@ textarea.field{ resize:vertical; min-height:50px; }
 }
 .btn-verify{ background:var(--green); color:#fff; }
 .btn-flag{ background:#fff; border:1px solid var(--pink); color:#b8134f; }
+/* ---- capture progress + feedback ---- */
+.shot-strip{ display:flex; gap:6px; margin:10px 0 2px; }
+.shot-cell{
+  flex:1; height:48px; border-radius:6px; border:1px solid var(--gray-line);
+  background:#dfe3e9; position:relative; overflow:hidden; display:flex;
+  align-items:center; justify-content:center; text-align:center;
+  font-size:8.5px; line-height:1.2; color:var(--gray-mid); padding:3px;
+}
+.shot-cell img{ width:100%; height:100%; object-fit:cover; }
+.shot-cell.done{ border-color:var(--green); }
+.shot-cell .tick{
+  position:absolute; top:2px; right:2px; width:14px; height:14px; border-radius:50%;
+  background:var(--green); color:#fff; font-size:9px;
+  display:flex; align-items:center; justify-content:center;
+}
+.shot-cell.current{ border:2px solid var(--pink); background:#fff; color:#b8134f; font-weight:700; }
+.shot-flash{
+  position:absolute; inset:0; background:#fff; pointer-events:none;
+  animation:shotflash .45s ease-out forwards;
+}
+@keyframes shotflash{ from{ opacity:.9; } to{ opacity:0; } }
+.camera-wrap .cam-msg{
+  position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+  padding:20px; background:#000;
+}
+.camera-wrap .cam-msg.show{ display:flex; }
+.field.warn{ border-color:#e0a63a; }
 </style>
 </head>
 <body>
@@ -398,6 +425,25 @@ function stopCamera() {
     state.stream.getTracks().forEach(t => t.stop());
     state.stream = null;
   }
+  if (state.videoEl) state.videoEl.srcObject = null;
+}
+
+// one <video> for the life of the page. innerHTML re-renders would otherwise
+// destroy it, and iOS Safari won't reliably resume a live stream on a new element
+function getVideoEl() {
+  if (!state.videoEl) {
+    const v = document.createElement('video');
+    v.id = 'video';
+    v.autoplay = true;
+    v.muted = true;
+    v.defaultMuted = true;
+    v.playsInline = true;
+    v.setAttribute('playsinline', '');
+    v.setAttribute('webkit-playsinline', '');
+    v.setAttribute('muted', '');
+    state.videoEl = v;
+  }
+  return state.videoEl;
 }
 
 function refNumber() {
@@ -637,12 +683,17 @@ function requestGPS() {
 
   // if the device won't hand over GPS, fall back to the site on file so the
   // capture flow still completes (in-app browsers routinely block geolocation)
+  const refresh = () => {
+    if (state.view === 'capture' && state.syncCapture) state.syncCapture();
+    else render();
+  };
+
   const useSite = () => {
     const site = (asset && SITE_GPS[asset.site]) || DEFAULT_GPS;
     state.draft.gps = { lat: site.lat, lon: site.lon };
     state.draft.gpsSource = 'site';
     state.draft.time = new Date();
-    render();
+    refresh();
   };
 
   if (!navigator.geolocation) { useSite(); return; }
@@ -652,7 +703,7 @@ function requestGPS() {
       state.draft.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude };
       state.draft.gpsSource = 'device';
       state.draft.time = new Date();
-      render();
+      refresh();
     },
     useSite,
     { enableHighAccuracy: true, timeout: 8000 }
@@ -662,91 +713,158 @@ function requestGPS() {
 function renderCapture() {
   const asset = ASSIGNMENTS.find(a => a.id === state.currentAssetId);
   const d = state.draft;
-  const shotLabel = asset.shots[d.shotIndex];
-  const gpsText = d.gps
-    ? (d.gpsSource === 'site'
-        ? `📍 ${asset.site}`
-        : `📍 ${d.gps.lat.toFixed(4)}, ${d.gps.lon.toFixed(4)}`)
-    : '📍 locating…';
-  const timeText = d.time ? `🕒 ${d.time.toLocaleString()}` : '🕒 —';
 
   screenEl.innerHTML = `
     <div class="row" style="margin-bottom:10px;">
-      <button class="backlink" id="backLink" style="margin:0;">← ${asset.name}</button>
-      <span class="muted">${d.photos.length + 1} of ${asset.shots.length} photos</span>
+      <button class="backlink" id="backLink" style="margin:0;">\u2190 ${asset.name}</button>
+      <span class="muted" id="shotCount"></span>
     </div>
 
-    ${d.gpsSource === 'site' ? `<div class="note-box note-warn">📍 Device GPS wasn't available in this browser, so photos are being stamped with the registered site location for ${asset.site}.</div>` : ''}
+    <div id="gpsNote"></div>
     ${state.resubmitBanner ? `<div class="note-box note-error">${state.resubmitBanner}</div>` : ''}
 
     <div class="camera-wrap" id="camWrap">
-      <video id="video" autoplay playsinline muted></video>
-      <div class="badge-float" style="top:8px;left:8px;">${gpsText}</div>
-      <div class="badge-float" style="top:32px;left:8px;">${timeText}</div>
+      <div class="cam-msg" id="camMsg"></div>
+      <div class="badge-float" id="gpsBadge" style="top:8px;left:8px;"></div>
+      <div class="badge-float" id="timeBadge" style="top:32px;left:8px;"></div>
     </div>
 
-    <div class="label-tag">Shot needed: ${shotLabel}</div>
+    <div class="shot-strip" id="shotStrip"></div>
+    <div class="label-tag" id="shotLabel"></div>
 
     <div class="label-tag" style="margin-top:8px;">Serial / VIN number</div>
-    <input class="field ${d.serial && !d.serialOk ? 'error' : ''}" id="serialInput" placeholder="Type or scan the plate" value="${d.serial}">
-    ${serialNote(d, asset)}
+    <input class="field" id="serialInput" placeholder="Type or scan the plate" value="${d.serial}">
+    <div id="serialNote"></div>
 
-    <button class="shutter" id="shutterBtn" ${(!d.serial.trim() || !d.gps) ? 'disabled' : ''}></button>
-    <p class="sub" style="text-align:center;margin-top:8px;">${!d.gps ? 'Getting location…' : (!d.serial.trim() ? 'Enter a serial number to unlock the shutter' : '')}</p>
+    <button class="shutter" id="shutterBtn"></button>
+    <p class="sub" id="captureHint" style="text-align:center;margin-top:8px;"></p>
   `;
 
-  // camera — reuse the existing stream if we already have one (don't re-request on every render)
-  const video = document.getElementById('video');
+  const camWrap  = document.getElementById('camWrap');
+  const camMsg   = document.getElementById('camMsg');
+  const video    = getVideoEl();
+
+  // re-parent the persistent video rather than creating a new one
+  camWrap.insertBefore(video, camWrap.firstChild);
   if (state.stream) {
-    video.srcObject = state.stream;
+    if (video.srcObject !== state.stream) video.srcObject = state.stream;
     video.play().catch(() => {});
-  } else if (!state.cameraRequestInFlight) {
-    state.cameraRequestInFlight = true;
+  }
+
+  const showCamMsg = (html) => { camMsg.innerHTML = html; camMsg.classList.add('show'); };
+
+  if (!state.stream && !state.cameraRequestInFlight) {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      state.cameraRequestInFlight = false;
-      const wrap = document.getElementById('camWrap');
-      if (wrap) wrap.innerHTML = `<div class="cam-msg">Camera API not available in this browser context.<br>Make sure you're on https:// and using Safari or Chrome directly.</div>`;
+      showCamMsg(`Camera API not available in this browser context.<br>Make sure you're on https:// and using Safari or Chrome directly.`);
     } else {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
-      .then(stream => {
-        state.cameraRequestInFlight = false;
-        state.stream = stream;
-        const v = document.getElementById('video');
-        if (v) { v.srcObject = stream; v.play().catch(() => {}); }
-      })
-      .catch((err) => {
-        state.cameraRequestInFlight = false;
-        const wrap = document.getElementById('camWrap');
-        if (wrap) wrap.innerHTML = `<div class="cam-msg">Camera unavailable or permission denied (${err.name}).<br>Check your browser's site settings and reload.<br>You can still continue with the fields above.</div>`;
-      });
+      state.cameraRequestInFlight = true;
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false })
+        .then(stream => {
+          state.cameraRequestInFlight = false;
+          state.stream = stream;
+          const v = getVideoEl();
+          v.srcObject = stream;
+          v.play().catch(() => {});
+          camMsg.classList.remove('show');
+        })
+        .catch(err => {
+          state.cameraRequestInFlight = false;
+          showCamMsg(`Camera unavailable or permission denied (${err.name}).<br>Check your browser's site settings and reload.<br>You can still continue with the fields above.`);
+        });
     }
   }
 
-  document.getElementById('backLink').onclick = () => go('assignments');
-
-  const serialInput = document.getElementById('serialInput');
-  serialInput.oninput = (e) => {
-    d.serial = e.target.value;
-    d.serialOk = d.serial.trim().toUpperCase() === asset.serialOnFile.toUpperCase();
-    render();
-    document.getElementById('serialInput').focus();
-    document.getElementById('serialInput').setSelectionRange(d.serial.length, d.serial.length);
+  // everything below updates in place — no innerHTML, so the video keeps playing
+  const els = {
+    count:   document.getElementById('shotCount'),
+    gpsNote: document.getElementById('gpsNote'),
+    gps:     document.getElementById('gpsBadge'),
+    time:    document.getElementById('timeBadge'),
+    strip:   document.getElementById('shotStrip'),
+    label:   document.getElementById('shotLabel'),
+    input:   document.getElementById('serialInput'),
+    note:    document.getElementById('serialNote'),
+    shutter: document.getElementById('shutterBtn'),
+    hint:    document.getElementById('captureHint'),
   };
 
-  document.getElementById('shutterBtn').onclick = () => {
+  function syncCaptureUi() {
+    const done = d.photos.length;
+    const total = asset.shots.length;
+    const remaining = done < total;
+
+    els.count.textContent = remaining
+      ? `${done + 1} of ${total} photos`
+      : `${total} of ${total} photos`;
+
+    els.gps.textContent = d.gps
+      ? (d.gpsSource === 'site' ? `\u{1F4CD} ${asset.site}` : `\u{1F4CD} ${d.gps.lat.toFixed(4)}, ${d.gps.lon.toFixed(4)}`)
+      : '\u{1F4CD} locating\u2026';
+    els.time.textContent = d.time ? `\u{1F553} ${d.time.toLocaleString()}` : '\u{1F553} \u2014';
+
+    els.gpsNote.innerHTML = d.gpsSource === 'site'
+      ? `<div class="note-box note-warn">\u{1F4CD} Device GPS wasn't available in this browser, so photos are being stamped with the registered site location for ${asset.site}.</div>`
+      : '';
+
+    // one cell per required shot: captured ones show the photo and a tick,
+    // the next one is outlined in pink
+    els.strip.innerHTML = asset.shots.map((label, i) => {
+      const shot = d.photos[i];
+      if (shot) return `<div class="shot-cell done"><img src="${shot.dataUrl}" alt="${label}"><span class="tick">\u2713</span></div>`;
+      if (i === d.photos.length) return `<div class="shot-cell current">${label}</div>`;
+      return `<div class="shot-cell">${label}</div>`;
+    }).join('');
+
+    els.label.textContent = remaining
+      ? `Shot needed: ${asset.shots[d.photos.length]}`
+      : 'All shots captured';
+
+    els.input.className = 'field' + (d.serial && !d.serialOk ? ' warn' : '');
+    els.note.innerHTML = serialNote(d, asset);
+
+    const ready = !!d.serial.trim() && !!d.gps;
+    els.shutter.disabled = !ready;
+    els.hint.textContent = !d.gps
+      ? 'Getting location\u2026'
+      : (!d.serial.trim() ? 'Enter a serial number to unlock the shutter' : '');
+  }
+
+  // let requestGPS refresh in place instead of tearing the screen down
+  state.syncCapture = syncCaptureUi;
+  syncCaptureUi();
+
+  document.getElementById('backLink').onclick = () => go('assignments');
+
+  els.input.oninput = (e) => {
+    d.serial = e.target.value;
+    d.serialOk = d.serial.trim().toUpperCase() === asset.serialOnFile.toUpperCase();
+    syncCaptureUi();
+  };
+
+  els.shutter.onclick = () => {
+    const shotLabel = asset.shots[d.photos.length];
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth || 320;
     canvas.height = video.videoHeight || 240;
     const ctx = canvas.getContext('2d');
     if (video.videoWidth) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    else { ctx.fillStyle = '#333'; ctx.fillRect(0,0,canvas.width,canvas.height); }
-    const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-    d.photos.push({ label: shotLabel, dataUrl, gps: d.gps, time: d.time });
-    d.shotIndex++;
-    if (d.shotIndex >= asset.shots.length) {
-      go('review', { currentAssetId: state.currentAssetId });
+    else { ctx.fillStyle = '#333'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+
+    d.photos.push({ label: shotLabel, dataUrl: canvas.toDataURL('image/jpeg', 0.8), gps: d.gps, time: d.time });
+    d.shotIndex = d.photos.length;
+
+    // visible shutter feedback
+    const flash = document.createElement('div');
+    flash.className = 'shot-flash';
+    camWrap.appendChild(flash);
+    setTimeout(() => flash.remove(), 500);
+
+    if (d.photos.length >= asset.shots.length) {
+      setTimeout(() => go('review', { currentAssetId: state.currentAssetId }), 400);
+      els.shutter.disabled = true;
+      els.hint.textContent = 'All shots captured \u2014 opening review\u2026';
     } else {
-      render();
+      syncCaptureUi();
     }
   };
 }
