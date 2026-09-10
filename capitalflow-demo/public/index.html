@@ -691,8 +691,8 @@ function renderCapture() {
     <input class="field ${d.serial && !d.serialOk ? 'error' : ''}" id="serialInput" placeholder="Type or scan the plate" value="${d.serial}">
     ${serialNote(d, asset)}
 
-    <button class="shutter" id="shutterBtn" ${(!d.serialOk || !d.gps) ? 'disabled' : ''}></button>
-    <p class="sub" style="text-align:center;margin-top:8px;">${!d.gps ? 'Getting location…' : (!d.serialOk ? 'Enter a matching serial number to unlock the shutter' : '')}</p>
+    <button class="shutter" id="shutterBtn" ${(!d.serial.trim() || !d.gps) ? 'disabled' : ''}></button>
+    <p class="sub" style="text-align:center;margin-top:8px;">${!d.gps ? 'Getting location…' : (!d.serial.trim() ? 'Enter a serial number to unlock the shutter' : '')}</p>
   `;
 
   // camera — reuse the existing stream if we already have one (don't re-request on every render)
@@ -756,7 +756,7 @@ function serialNote(d, asset) {
   if (d.serialOk) {
     return `<div class="note-box note-ok">✓ Matches agreement ${asset.agreement} on file for this supplier.</div>`;
   }
-  return `<div class="note-box note-error">✕ Doesn't match agreement ${asset.agreement} on file. Check the plate and re-enter — you can't continue until this matches.</div>`;
+  return `<div class="note-box note-warn">⚠️ Doesn't match agreement ${asset.agreement} on file (expected ${asset.serialOnFile}). The live product blocks submission here — the demo lets you continue, and the review team sees the mismatch flagged.</div>`;
 }
 
 function renderReview() {
@@ -817,7 +817,7 @@ function renderSummary() {
     <h2 class="title">Review before sending</h2>
     <div class="card">
       <b style="font-size:13px;">${asset.name}</b>
-      <div class="meta-line"><span>Serial / VIN</span><b>${d.serial} ✓</b></div>
+      <div class="meta-line"><span>Serial / VIN</span><b>${d.serial} ${d.serialOk ? '✓' : '⚠️'}</b></div>
       <div class="meta-line"><span>Agreement on file</span><b>${asset.agreement}</b></div>
       <div class="meta-line"><span>Location</span><b>${d.gps ? d.gps.lat.toFixed(4)+', '+d.gps.lon.toFixed(4) + (d.gpsSource === 'site' ? ' (site)' : '') : '—'}</b></div>
       <div class="meta-line"><span>Captured</span><b>${d.time ? d.time.toLocaleString() : '—'}</b></div>
@@ -836,6 +836,7 @@ function renderSummary() {
       id, assetName: asset.name, supplier: asset.supplier, agreement: asset.agreement,
       serial: d.serial, gps: d.gps, time: d.time ? d.time.toLocaleString() : '—',
       photos: d.photos, status: 'submitted', notes: d.notes, condition: d.condition,
+      serialMatch: d.serialOk, siteMatch: true,
     });
     asset.status = 'submitted';
     go('confirmation', { lastRef: id });
@@ -967,7 +968,7 @@ function renderDashDetail() {
       <div class="checkrow ${serialOk ? 'pass' : 'fail'}">
         <span class="mark">${serialOk ? '\u2713' : '\u2715'}</span>
         <span>Serial / VIN ${serialOk ? 'matches the agreement on file' : 'does NOT match the agreement on file'}
-          <span class="cr-sub">${s.serial} \u00b7 blocking check, run at capture</span>
+          <span class="cr-sub">${s.serial} \u00b7 ${serialOk ? 'blocking check, run at capture' : 'allowed through in demo mode'}</span>
         </span>
       </div>
       <div class="checkrow ${siteOk ? 'pass' : 'fail'}">
