@@ -202,6 +202,78 @@ textarea.field{ resize:vertical; min-height:50px; }
   font-size:11px; color:var(--gray-mid); cursor:pointer; display:block; text-align:left;
 }
 .backlink:hover{ color:var(--navy-2); text-decoration:underline; }
+/* ---- internal review console ---- */
+.screen.internal{ background:#e6eaf1; }
+.kpis{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:12px; }
+.kpi{ background:#fff; border:1px solid var(--gray-line); border-radius:8px; padding:9px 6px; text-align:center; }
+.kpi b{ display:block; font-size:19px; line-height:1.15; color:var(--navy); }
+.kpi span{ font-size:8.5px; text-transform:uppercase; letter-spacing:.4px; color:var(--gray-mid); }
+.kpi.warn b{ color:#9a6b0a; }
+.kpi.good b{ color:var(--green); }
+.kpi.bad b{ color:var(--pink); }
+
+.chips{ display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+.chip{
+  font-size:10px; font-weight:600; padding:5px 11px; border-radius:14px;
+  border:1px solid var(--gray-line); background:#fff; color:var(--gray-dark);
+  cursor:pointer; font-family:inherit;
+}
+.chip.active{ background:var(--navy); border-color:var(--navy); color:#fff; }
+
+.qcard{
+  background:#fff; border:1px solid var(--gray-line); border-left:3px solid var(--gray-mid);
+  border-radius:8px; padding:11px 12px; margin-bottom:9px; cursor:pointer;
+}
+.qcard:hover{ box-shadow:0 2px 9px rgba(14,42,82,.11); }
+.qcard.s-submitted{ border-left-color:#1a5aa3; }
+.qcard.s-verified{ border-left-color:var(--green); }
+.qcard.s-flagged{ border-left-color:var(--pink); }
+.qcard.s-pending{ border-left-color:#e0a63a; }
+.qmeta{ font-size:11px; color:var(--gray-mid); margin-top:4px; }
+.checks{ display:flex; gap:11px; margin-top:8px; font-size:10px; }
+.check{ color:var(--gray-mid); }
+.check.pass{ color:#2c7a28; }
+.check.fail{ color:#b8134f; font-weight:600; }
+
+.detail-head{ background:var(--navy); color:#fff; border-radius:9px; padding:12px 13px; margin-bottom:12px; }
+.detail-head .dh-row{ display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+.detail-head b{ font-size:14px; }
+.detail-head .dh-meta{ font-size:11px; color:#b6c4d7; margin-top:5px; }
+
+.checkrow{ display:flex; align-items:flex-start; gap:9px; font-size:11.5px; padding:9px 0; border-bottom:1px solid #eef0f3; }
+.checkrow:last-child{ border-bottom:none; }
+.checkrow .mark{
+  width:17px; height:17px; border-radius:50%; color:#fff; font-size:10px; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center; margin-top:1px;
+}
+.checkrow.pass .mark{ background:var(--green); }
+.checkrow.fail .mark{ background:var(--pink); }
+.checkrow .cr-sub{ display:block; color:var(--gray-mid); font-size:10px; margin-top:2px; }
+
+.map-box{
+  position:relative; height:104px; border-radius:8px; overflow:hidden;
+  border:1px solid var(--gray-line); margin-bottom:10px;
+  background:
+    linear-gradient(0deg, rgba(255,255,255,.5) 1px, transparent 1px) 0 0/100% 18px,
+    linear-gradient(90deg, rgba(255,255,255,.5) 1px, transparent 1px) 0 0/18px 100%,
+    linear-gradient(135deg,#dae3ee,#eaf0f6);
+}
+.map-box .road{ position:absolute; background:#ccd8e5; }
+.map-box .coord{
+  position:absolute; bottom:6px; left:6px; background:rgba(14,42,82,.86); color:#fff;
+  font-size:9.5px; padding:3px 7px; border-radius:4px;
+}
+.map-pin{
+  position:absolute; top:32%; left:46%; width:15px; height:15px; background:var(--pink);
+  border:2px solid #fff; border-radius:50% 50% 50% 0; transform:rotate(-45deg);
+  box-shadow:0 2px 5px rgba(0,0,0,.32);
+}
+.photo-empty{
+  background:#e3e8ee; border:1px dashed var(--gray-line); border-radius:8px;
+  padding:18px 14px; text-align:center; font-size:11px; color:var(--gray-mid); margin-bottom:10px;
+}
+.btn-verify{ background:var(--green); color:#fff; }
+.btn-flag{ background:#fff; border:1px solid var(--pink); color:#b8134f; }
 </style>
 </head>
 <body>
@@ -270,6 +342,7 @@ let state = {
   draft: null, // { serial, serialOk, gps, time, photos:[], shotIndex, condition:{}, notes }
   stream: null,
   dashDetailId: null,
+  dashFilter: 'all',
 };
 
 const screenEl = document.getElementById('screen');
@@ -359,6 +432,12 @@ function renderTabbar() {
 function render() {
   renderTabbar();
   const v = state.view;
+
+  // the review console is a different persona: cooler background, no supplier bell
+  const internal = (v === 'dashList' || v === 'dashDetail');
+  screenEl.classList.toggle('internal', internal);
+  const bell = document.getElementById('bellBtn');
+  if (bell) bell.style.display = internal ? 'none' : '';
   if (v === 'login') return renderLogin();
   if (v === 'assignments') return renderAssignments();
   if (v === 'capture') return renderCapture();
@@ -756,77 +835,172 @@ function renderResubmit() {
 }
 
 function renderDashList() {
-  const filterRow = `
-    <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap;">
-      <span class="pill pill-submitted">All (${SUBMISSIONS.length})</span>
+  const f = state.dashFilter || 'all';
+  const n = st => SUBMISSIONS.filter(s => s.status === st).length;
+  const list = f === 'all' ? SUBMISSIONS : SUBMISSIONS.filter(s => s.status === f);
+
+  const chips = [
+    ['all', 'All'], ['submitted', 'Awaiting'], ['verified', 'Verified'], ['flagged', 'Flagged'],
+  ].map(([key, label]) =>
+    `<button class="chip ${f === key ? 'active' : ''}" data-filter="${key}">${label}</button>`
+  ).join('');
+
+  const rows = list.map(s => {
+    const serialOk = s.serialMatch !== false;
+    const siteOk = s.siteMatch !== false;
+    const shots = (s.photos && s.photos.length) || 0;
+    return `
+    <div class="qcard s-${s.status}" data-id="${s.id}">
+      <div class="row"><b style="font-size:12.5px;">${s.assetName}</b>${statusPill(s.status)}</div>
+      <div class="qmeta">${s.supplier} \u00b7 Ref ${s.id}</div>
+      <div class="qmeta">Submitted ${s.time}</div>
+      <div class="checks">
+        <span class="check ${serialOk ? 'pass' : 'fail'}">${serialOk ? '\u2713' : '\u2715'} Serial</span>
+        <span class="check ${siteOk ? 'pass' : 'fail'}">${siteOk ? '\u2713' : '\u2715'} Location</span>
+        <span class="check">\u{1F4F7} ${shots} photo${shots === 1 ? '' : 's'}</span>
+      </div>
     </div>`;
-  const rows = SUBMISSIONS.map(s => `
-    <tr data-id="${s.id}">
-      <td>${s.assetName}</td>
-      <td>${s.supplier}</td>
-      <td>${s.time}</td>
-      <td>${statusPill(s.status)}</td>
-    </tr>
-  `).join('');
+  }).join('');
+
   screenEl.innerHTML = `
-    <h2 class="title">Submissions queue</h2>
-    <p class="sub">Internal review team</p>
-    ${filterRow}
-    <table>
-      <tr><th>Asset</th><th>Supplier</th><th>Submitted</th><th>Status</th></tr>
-      ${rows}
-    </table>
-    <button class="btn btn-ghost" id="backToApp" style="margin-top:16px;">← Back to supplier app</button>
+    <div class="row" style="margin-bottom:12px;">
+      <div>
+        <h2 class="title" style="margin:0;">Submissions queue</h2>
+        <p class="sub" style="margin:2px 0 0;">Internal review team</p>
+      </div>
+      <span class="pill" style="background:var(--navy);color:#fff;">Internal</span>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi warn"><b>${n('submitted')}</b><span>Awaiting</span></div>
+      <div class="kpi good"><b>${n('verified')}</b><span>Verified</span></div>
+      <div class="kpi bad"><b>${n('flagged')}</b><span>Flagged</span></div>
+    </div>
+
+    <div class="chips">${chips}</div>
+
+    ${list.length ? rows : '<div class="note-box note-warn">Nothing in this bucket right now.</div>'}
+
+    <button class="btn btn-ghost" id="backToApp" style="margin-top:14px;">\u2190 Back to supplier app</button>
   `;
-  screenEl.querySelectorAll('tr[data-id]').forEach(tr => {
-    tr.onclick = () => go('dashDetail', { dashDetailId: tr.dataset.id });
+
+  screenEl.querySelectorAll('.chip').forEach(chip => {
+    chip.onclick = () => go('dashList', { dashFilter: chip.dataset.filter });
+  });
+  screenEl.querySelectorAll('.qcard').forEach(card => {
+    card.onclick = () => go('dashDetail', { dashDetailId: card.dataset.id });
   });
   document.getElementById('backToApp').onclick = () => go('login');
 }
 
 function renderDashDetail() {
   const s = SUBMISSIONS.find(x => x.id === state.dashDetailId);
-  const photos = (s.photos && s.photos.length)
-    ? s.photos.map(p => `<div class="thumb" style="height:90px;"><img src="${p.dataUrl}"></div>`).join('')
-    : `<div class="muted">No photos captured for this seeded example.</div>`;
-  const gpsText = s.gps ? `${s.gps.lat.toFixed(4)}, ${s.gps.lon.toFixed(4)}` : '—';
+  const gpsText = s.gps ? `${s.gps.lat.toFixed(4)}, ${s.gps.lon.toFixed(4)}` : '\u2014';
   const history = SUPPLIER_HISTORY[s.supplier] || 'No history on file';
+  const serialOk = s.serialMatch !== false;
+  const siteOk = s.siteMatch !== false;
+  const decided = s.status === 'verified' || s.status === 'flagged';
+
+  const photos = (s.photos && s.photos.length)
+    ? `<div class="thumb-grid">${s.photos.map(pp => `<div class="thumb" style="height:90px;"><img src="${pp.dataUrl}"></div>`).join('')}</div>`
+    : `<div class="photo-empty">No photos on this seeded example.<br>Submit an asset from the supplier app to see real captures here.</div>`;
+
+  const condition = (s.condition && Object.keys(s.condition).length)
+    ? `<div class="label-tag">Condition reported</div>
+       <div class="card" style="padding:2px 12px;">
+         ${Object.entries(s.condition).map(([k, v], i, a) =>
+           `<div class="meta-line"${i === a.length - 1 ? ' style="border-bottom:none;"' : ''}><span>${k}</span><b>${v}</b></div>`
+         ).join('')}
+       </div>`
+    : '';
 
   screenEl.innerHTML = `
-    <button class="backlink" id="backLink">← ${s.assetName} — ${s.id}</button>
-    <div class="label-tag">Photos</div>
-    <div class="thumb-grid">${photos}</div>
-    <div class="label-tag">Location on map</div>
-    <div class="map-placeholder"><div class="pin"></div></div>
-    <div class="label-tag">Audit trail</div>
-    <div class="card" style="padding:10px 12px;">
-      <div class="audit-item">Submitted by supplier — ${s.time}</div>
-      <div class="audit-item">Auto-check: serial ${s.serialMatch !== false ? 'matched' : 'did NOT match'} agreement ${s.agreement} on file (blocking check, passed at capture)</div>
-      <div class="audit-item">Auto-check: GPS ${s.siteMatch !== false ? 'matches' : 'does not match'} registered site address</div>
-      <div class="audit-item">${s.status === 'pending' || s.status === 'submitted' ? 'Awaiting reviewer decision' : ('Reviewer marked ' + s.status)}</div>
+    <button class="backlink" id="backLink">\u2190 Back to queue</button>
+
+    <div class="detail-head">
+      <div class="dh-row">
+        <div>
+          <b>${s.assetName}</b>
+          <div class="dh-meta">${s.supplier}</div>
+          <div class="dh-meta">Ref ${s.id} \u00b7 ${s.agreement}</div>
+        </div>
+        ${statusPill(s.status)}
+      </div>
     </div>
+
+    ${decided ? `<div class="note-box ${s.status === 'verified' ? 'note-ok' : 'note-error'}">
+      ${s.status === 'verified'
+        ? '\u2713 Marked verified \u2014 the supplier has been notified.'
+        : '\u{1F6A9} Flagged: ' + (s.flagReason || 'Needs review') + ' \u2014 the supplier has been asked to resubmit.'}
+    </div>` : ''}
+
+    <div class="label-tag">Automatic checks</div>
+    <div class="card" style="padding:4px 12px;">
+      <div class="checkrow ${serialOk ? 'pass' : 'fail'}">
+        <span class="mark">${serialOk ? '\u2713' : '\u2715'}</span>
+        <span>Serial / VIN ${serialOk ? 'matches the agreement on file' : 'does NOT match the agreement on file'}
+          <span class="cr-sub">${s.serial} \u00b7 blocking check, run at capture</span>
+        </span>
+      </div>
+      <div class="checkrow ${siteOk ? 'pass' : 'fail'}">
+        <span class="mark">${siteOk ? '\u2713' : '\u2715'}</span>
+        <span>GPS ${siteOk ? 'matches the registered site' : 'does not match the registered site'}
+          <span class="cr-sub">${gpsText}</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="label-tag">Photos</div>
+    ${photos}
+
+    <div class="label-tag">Capture location</div>
+    <div class="map-box">
+      <div class="road" style="top:44px;left:0;right:0;height:7px;"></div>
+      <div class="road" style="top:0;bottom:0;left:98px;width:6px;"></div>
+      <div class="map-pin"></div>
+      <div class="coord">\u{1F4CD} ${gpsText}</div>
+    </div>
+
+    ${condition}
+
+    ${s.notes ? `<div class="label-tag">Supplier notes</div>
+       <div class="card" style="font-size:12px;">${s.notes}</div>` : ''}
+
     <div class="label-tag">Asset record</div>
     <div class="card">
       <div class="meta-line"><span>Serial / VIN</span><b>${s.serial}</b></div>
       <div class="meta-line"><span>Agreement</span><b>${s.agreement}</b></div>
-      <div class="meta-line"><span>Location</span><b>${gpsText}</b></div>
       <div class="meta-line"><span>Submitted</span><b>${s.time}</b></div>
       <div class="meta-line" style="border-bottom:none;"><span>Supplier history</span><b>${history}</b></div>
     </div>
-    <button class="btn btn-secondary" id="verifyBtn">Mark verified</button>
-    <button class="btn btn-outline" id="flagBtn">Flag for follow-up</button>
-    <div id="flagArea"></div>
-    <button class="btn btn-ghost" id="backList" style="margin-top:10px;">← Back to queue</button>
+
+    <div class="label-tag">Audit trail</div>
+    <div class="card" style="padding:10px 12px;">
+      <div class="audit-item">Submitted by supplier \u2014 ${s.time}</div>
+      <div class="audit-item">Auto-checks ${serialOk && siteOk ? 'passed' : 'returned a mismatch'}</div>
+      <div class="audit-item">${decided ? 'Reviewer marked ' + s.status : 'Awaiting reviewer decision'}</div>
+    </div>
+
+    ${decided ? '' : `
+      <button class="btn btn-verify" id="verifyBtn">Mark verified</button>
+      <button class="btn btn-flag" id="flagBtn">Flag for follow-up</button>
+      <div id="flagArea"></div>`}
+
+    <button class="btn btn-ghost" id="backList" style="margin-top:10px;">\u2190 Back to queue</button>
   `;
 
   document.getElementById('backLink').onclick = () => go('dashList');
+  document.getElementById('backList').onclick = () => go('dashList');
 
-  document.getElementById('verifyBtn').onclick = () => {
+  const verifyBtn = document.getElementById('verifyBtn');
+  if (verifyBtn) verifyBtn.onclick = () => {
     s.status = 'verified';
     pushNotification({ type: 'verified', assetName: s.assetName, assetId: s.id, reason: null });
     go('dashDetail', { dashDetailId: s.id });
   };
-  document.getElementById('flagBtn').onclick = () => {
+
+  const flagBtn = document.getElementById('flagBtn');
+  if (flagBtn) flagBtn.onclick = () => {
     document.getElementById('flagArea').innerHTML = `
       <textarea class="field" id="reasonInput" placeholder="Reason (e.g. serial mismatch, location doesn't match site)"></textarea>
       <button class="btn btn-primary" id="confirmFlag">Send flag to supplier</button>
@@ -839,7 +1013,6 @@ function renderDashDetail() {
       go('dashDetail', { dashDetailId: s.id });
     };
   };
-  document.getElementById('backList').onclick = () => go('dashList');
 }
 
 function pushNotification({ type, assetName, assetId, reason }) {
