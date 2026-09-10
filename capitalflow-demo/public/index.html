@@ -181,6 +181,27 @@ textarea.field{ resize:vertical; min-height:50px; }
   position:absolute; top:-2px; right:-2px; width:8px; height:8px; background:var(--pink); border-radius:50%;
 }
 
+.tabbar{
+  display:flex; background:var(--white); border-top:1px solid var(--gray-line);
+  padding:6px 4px 8px; flex-shrink:0;
+}
+.tabbar.hidden{ display:none; }
+.tab{
+  flex:1; background:none; border:none; cursor:pointer; padding:4px 0;
+  display:flex; flex-direction:column; align-items:center; gap:3px;
+  font-family:inherit; font-size:10px; color:var(--gray-mid); position:relative;
+}
+.tab .ico{ font-size:17px; line-height:1; }
+.tab.active{ color:var(--pink); font-weight:700; }
+.tab-dot{
+  position:absolute; top:0; left:50%; margin-left:8px;
+  width:7px; height:7px; background:var(--pink); border-radius:50%;
+}
+.backlink{
+  background:none; border:none; padding:0; margin:0 0 10px; font-family:inherit;
+  font-size:11px; color:var(--gray-mid); cursor:pointer; display:block; text-align:left;
+}
+.backlink:hover{ color:var(--navy-2); text-decoration:underline; }
 </style>
 </head>
 <body>
@@ -192,6 +213,7 @@ textarea.field{ resize:vertical; min-height:50px; }
       <button class="bell" id="bellBtn">🔔<span class="dot" id="bellDot" style="display:none;"></span></button>
     </div>
     <div id="screen" class="screen"></div>
+    <nav id="tabbar" class="tabbar"></nav>
   </div>
   <div class="demo-note">Working demo — uses your device camera &amp; GPS. Nothing is saved after you close this tab.</div>
   <button id="dashBtn" class="floating-dash-btn">Internal dashboard →</button>
@@ -203,6 +225,15 @@ const SUPPLIER_HISTORY = {
   'Naas Rd Plant Ltd': '22 on-time, 1 flagged',
   'Munster Plant Hire': '9 on-time, 3 flagged',
   'Dublin Fleet Co': '40 on-time, 0 flagged',
+};
+
+// the logged-in supplier account (drives the Profile tab)
+const SUPPLIER = {
+  name: 'Naas Rd Plant Ltd',
+  id: 'CF-SUP-1042',
+  email: 'supplier@naasrdplant.ie',
+  phone: '+353 1 456 7890',
+  sites: ['Naas Rd Depot', 'Cork Yard'],
 };
 
 const ASSIGNMENTS = [
@@ -242,6 +273,7 @@ let state = {
 };
 
 const screenEl = document.getElementById('screen');
+const tabbarEl = document.getElementById('tabbar');
 const dashBtn = document.getElementById('dashBtn');
 dashBtn.addEventListener('click', () => { stopCamera(); state.view = 'dashList'; render(); });
 document.getElementById('bellBtn').addEventListener('click', () => { stopCamera(); state.view = 'notifications'; render(); });
@@ -250,6 +282,22 @@ updateBellDot();
 function updateBellDot() {
   const dot = document.getElementById('bellDot');
   if (dot) dot.style.display = NOTIFICATIONS.some(n => n.unread) ? 'block' : 'none';
+  syncTabDot();
+}
+
+// keep the Alerts tab's unread dot in step with the bell
+function syncTabDot() {
+  const tab = tabbarEl.querySelector('.tab[data-view="notifications"]');
+  if (!tab) return;
+  const has = NOTIFICATIONS.some(n => n.unread);
+  const existing = tab.querySelector('.tab-dot');
+  if (has && !existing) {
+    const s = document.createElement('span');
+    s.className = 'tab-dot';
+    tab.appendChild(s);
+  } else if (!has && existing) {
+    existing.remove();
+  }
 }
 
 function go(view, extra = {}) {
@@ -269,8 +317,47 @@ function refNumber() {
   return 'CF-' + Math.floor(2000 + Math.random() * 900) + '-' + Math.random().toString(36).slice(2, 4).toUpperCase();
 }
 
+// ---------- Bottom tab bar ----------
+const TABS = [
+  { key: 'home',    view: 'assignments',   icon: '\u{1F3E0}', label: 'Home' },
+  { key: 'history', view: 'history',       icon: '\u{1F4CB}', label: 'History' },
+  { key: 'alerts',  view: 'notifications', icon: '\u{1F514}', label: 'Alerts' },
+  { key: 'profile', view: 'profile',       icon: '\u{1F464}', label: 'Profile' },
+];
+
+// which tab lights up for each screen
+const VIEW_TAB = {
+  assignments: 'home', capture: 'home', review: 'home', summary: 'home',
+  confirmation: 'home', resubmit: 'home', assetStatus: 'home',
+  history: 'history', notifications: 'alerts', profile: 'profile',
+};
+
+// login and the internal dashboard aren't part of the supplier tab flow
+const NO_TABBAR = ['login', 'dashList', 'dashDetail'];
+
+function renderTabbar() {
+  if (NO_TABBAR.includes(state.view)) {
+    tabbarEl.classList.add('hidden');
+    tabbarEl.innerHTML = '';
+    return;
+  }
+  tabbarEl.classList.remove('hidden');
+  const active = VIEW_TAB[state.view] || 'home';
+  const unread = NOTIFICATIONS.some(n => n.unread);
+  tabbarEl.innerHTML = TABS.map(t => `
+    <button class="tab ${t.key === active ? 'active' : ''}" data-view="${t.view}">
+      <span class="ico">${t.icon}</span>${t.label}
+      ${t.key === 'alerts' && unread ? '<span class="tab-dot"></span>' : ''}
+    </button>
+  `).join('');
+  tabbarEl.querySelectorAll('.tab').forEach(btn => {
+    btn.onclick = () => go(btn.dataset.view);
+  });
+}
+
 // ---------- Render router ----------
 function render() {
+  renderTabbar();
   const v = state.view;
   if (v === 'login') return renderLogin();
   if (v === 'assignments') return renderAssignments();
@@ -283,6 +370,8 @@ function render() {
   if (v === 'resubmit') return renderResubmit();
   if (v === 'notifications') return renderNotifications();
   if (v === 'assetStatus') return renderAssetStatus();
+  if (v === 'history') return renderHistory();
+  if (v === 'profile') return renderProfile();
 }
 
 // ---------- Screens ----------
@@ -300,7 +389,11 @@ function renderLogin() {
       <button class="btn btn-primary" id="loginBtn">Log in</button>
     </div>
   `;
-  document.getElementById('loginBtn').onclick = () => go('assignments');
+  document.getElementById('loginBtn').onclick = () => {
+    const typed = document.getElementById('loginEmail').value.trim();
+    if (typed) SUPPLIER.email = typed;
+    go('assignments');
+  };
 }
 
 function renderAssignments() {
@@ -336,7 +429,7 @@ function renderAssetStatus() {
     ? 'This submission has been reviewed and verified — no action needed.'
     : 'This submission is with the review team. You\'ll get a notification here if anything needs fixing.';
   screenEl.innerHTML = `
-    <div class="muted" style="margin-bottom:10px;">← My assignments</div>
+    <button class="backlink" id="backLink">← My assignments</button>
     <div class="card">
       <div class="row"><b style="font-size:13px;">${asset.name}</b>${statusPill(asset.status)}</div>
       <div class="muted" style="margin-top:6px;">${asset.site} · Agreement ${asset.agreement}</div>
@@ -344,6 +437,7 @@ function renderAssetStatus() {
     <div class="note-box ${asset.status === 'verified' ? 'note-ok' : 'note-warn'}">${asset.status === 'verified' ? '✓' : '⏳'} ${msg}</div>
     <button class="btn btn-ghost" id="backBtn">← Back to assignments</button>
   `;
+  document.getElementById('backLink').onclick = () => go('assignments');
   document.getElementById('backBtn').onclick = () => go('assignments');
 }
 
@@ -377,6 +471,46 @@ function renderNotifications() {
     btn.onclick = () => go('resubmit', { currentAssetId: btn.dataset.resubmit });
   });
   document.getElementById('backBtn').onclick = () => go('assignments');
+}
+
+function renderHistory() {
+  const rows = SUBMISSIONS.map(s => `
+    <div class="card">
+      <div class="row"><b style="font-size:12px;">${s.assetName}</b>${statusPill(s.status)}</div>
+      <div class="muted" style="margin-top:4px;">Ref ${s.id} \u00b7 ${s.time}</div>
+      <div class="muted" style="margin-top:2px;">Agreement ${s.agreement}</div>
+      ${s.status === 'flagged' && s.flagReason ? `<div class="muted" style="color:#b8134f;margin-top:4px;">\u{1F6A9} ${s.flagReason}</div>` : ''}
+    </div>
+  `).join('');
+  screenEl.innerHTML = `
+    <h2 class="title">Submission history</h2>
+    <p class="sub">Everything you've sent for review</p>
+    ${rows || '<div class="note-box note-warn">Nothing submitted yet \u2014 verify an asset from Home to get started.</div>'}
+  `;
+}
+
+function renderProfile() {
+  const record = SUPPLIER_HISTORY[SUPPLIER.name] || 'No history on file';
+  const sites = SUPPLIER.sites.map((site, i) => `
+    <div class="meta-line"${i === SUPPLIER.sites.length - 1 ? ' style="border-bottom:none;"' : ''}>
+      <span>${site}</span><b>Registered</b>
+    </div>`).join('');
+  screenEl.innerHTML = `
+    <h2 class="title">Profile</h2>
+    <p class="sub">Your supplier account</p>
+    <div class="card">
+      <div class="row"><b style="font-size:13px;">${SUPPLIER.name}</b><span class="pill pill-verified">Active</span></div>
+      <div class="meta-line"><span>Supplier ID</span><b>${SUPPLIER.id}</b></div>
+      <div class="meta-line"><span>Registered contact</span><b>${SUPPLIER.email}</b></div>
+      <div class="meta-line"><span>Phone</span><b>${SUPPLIER.phone}</b></div>
+      <div class="meta-line" style="border-bottom:none;"><span>Verification record</span><b>${record}</b></div>
+    </div>
+    <div class="label-tag">Registered sites</div>
+    <div class="card">${sites}</div>
+    <div class="note-box note-warn">\u2709\ufe0f Flag and verification notices are also emailed to ${SUPPLIER.email}.</div>
+    <button class="btn btn-outline" id="signOutBtn">Sign out</button>
+  `;
+  document.getElementById('signOutBtn').onclick = () => go('login');
 }
 
 function statusPill(status) {
@@ -431,7 +565,7 @@ function renderCapture() {
 
   screenEl.innerHTML = `
     <div class="row" style="margin-bottom:10px;">
-      <span class="muted">← ${asset.name}</span>
+      <button class="backlink" id="backLink" style="margin:0;">← ${asset.name}</button>
       <span class="muted">${d.photos.length + 1} of ${asset.shots.length} photos</span>
     </div>
 
@@ -481,6 +615,8 @@ function renderCapture() {
     }
   }
 
+  document.getElementById('backLink').onclick = () => go('assignments');
+
   const serialInput = document.getElementById('serialInput');
   serialInput.oninput = (e) => {
     d.serial = e.target.value;
@@ -523,7 +659,7 @@ function renderReview() {
   const conditionItems = ['Bodywork', 'Tyres/tracks', 'Glass/mirrors'];
 
   screenEl.innerHTML = `
-    <div class="muted" style="margin-bottom:10px;">← ${asset.name}</div>
+    <button class="backlink" id="backLink">← ${asset.name}</button>
     <div class="label-tag">Photos captured</div>
     <div class="thumb-grid">${thumbs}</div>
     <div class="label-tag">Condition check</div>
@@ -557,6 +693,7 @@ function renderReview() {
     });
   });
 
+  document.getElementById('backLink').onclick = () => go('assignments');
   document.getElementById('notesInput').oninput = (e) => { d.notes = e.target.value; };
   document.getElementById('continueBtn').onclick = () => go('summary', { currentAssetId: state.currentAssetId });
 }
@@ -569,6 +706,7 @@ function renderSummary() {
     : 'Not set';
 
   screenEl.innerHTML = `
+    <button class="backlink" id="backLink">← ${asset.name}</button>
     <h2 class="title">Review before sending</h2>
     <div class="card">
       <b style="font-size:13px;">${asset.name}</b>
@@ -582,6 +720,8 @@ function renderSummary() {
     <div class="note-box note-warn">🔒 Photos are timestamped and geotagged automatically from your device and can't be edited or replaced after capture.</div>
     <button class="btn btn-primary" id="submitBtn">Submit for review</button>
   `;
+
+  document.getElementById('backLink').onclick = () => go('review', { currentAssetId: state.currentAssetId });
 
   document.getElementById('submitBtn').onclick = () => {
     const id = refNumber();
@@ -653,7 +793,7 @@ function renderDashDetail() {
   const history = SUPPLIER_HISTORY[s.supplier] || 'No history on file';
 
   screenEl.innerHTML = `
-    <div class="muted" style="margin-bottom:8px;">← ${s.assetName} — ${s.id}</div>
+    <button class="backlink" id="backLink">← ${s.assetName} — ${s.id}</button>
     <div class="label-tag">Photos</div>
     <div class="thumb-grid">${photos}</div>
     <div class="label-tag">Location on map</div>
@@ -678,6 +818,8 @@ function renderDashDetail() {
     <div id="flagArea"></div>
     <button class="btn btn-ghost" id="backList" style="margin-top:10px;">← Back to queue</button>
   `;
+
+  document.getElementById('backLink').onclick = () => go('dashList');
 
   document.getElementById('verifyBtn').onclick = () => {
     s.status = 'verified';
