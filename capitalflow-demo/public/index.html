@@ -299,6 +299,20 @@ const SUPPLIER_HISTORY = {
   'Dublin Fleet Co': '40 on-time, 0 flagged',
 };
 
+// condition checklist items, and the 'Good' default the review screen shows
+const CONDITION_ITEMS = ['Bodywork', 'Tyres/tracks', 'Glass/mirrors'];
+const defaultCondition = () =>
+  CONDITION_ITEMS.reduce((acc, item) => { acc[item] = 'Good'; return acc; }, {});
+
+// registered coordinates for each site — used when the device won't give us GPS
+// (in-app browsers and denied permissions), so the demo always completes
+const SITE_GPS = {
+  'Naas Rd Depot': { lat: 53.3272, lon: -6.3306 },
+  'Cork Yard':     { lat: 51.8985, lon: -8.4756 },
+  'Dublin Port':   { lat: 53.3441, lon: -6.2675 },
+};
+const DEFAULT_GPS = { lat: 53.3498, lon: -6.2603 };
+
 // the logged-in supplier account (drives the Profile tab)
 const SUPPLIER = {
   name: 'Naas Rd Plant Ltd',
@@ -608,30 +622,40 @@ function startCaptureFlow(assetId) {
   state.currentAssetId = assetId;
   state.resubmitBanner = null;
   state.draft = {
-    serial: '', serialOk: false, gps: null, gpsError: null, time: null,
-    photos: [], shotIndex: 0, condition: {}, notes: '',
+    serial: '', serialOk: false, gps: null, gpsSource: null, time: null,
+    photos: [], shotIndex: 0, condition: defaultCondition(), notes: '',
   };
   go('capture', { currentAssetId: assetId });
   requestGPS();
 }
 
 function requestGPS() {
-  if (!navigator.geolocation) {
-    state.draft.gpsError = 'Geolocation not supported on this device.';
+  const asset = ASSIGNMENTS.find(a => a.id === state.currentAssetId);
+
+  // timestamp is independent of location — stamp it straight away
+  state.draft.time = new Date();
+
+  // if the device won't hand over GPS, fall back to the site on file so the
+  // capture flow still completes (in-app browsers routinely block geolocation)
+  const useSite = () => {
+    const site = (asset && SITE_GPS[asset.site]) || DEFAULT_GPS;
+    state.draft.gps = { lat: site.lat, lon: site.lon };
+    state.draft.gpsSource = 'site';
+    state.draft.time = new Date();
     render();
-    return;
-  }
+  };
+
+  if (!navigator.geolocation) { useSite(); return; }
+
   navigator.geolocation.getCurrentPosition(
     pos => {
       state.draft.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+      state.draft.gpsSource = 'device';
       state.draft.time = new Date();
       render();
     },
-    err => {
-      state.draft.gpsError = 'Location permission denied — allow location access to continue.';
-      render();
-    },
-    { enableHighAccuracy: true, timeout: 10000 }
+    useSite,
+    { enableHighAccuracy: true, timeout: 8000 }
   );
 }
 
@@ -639,7 +663,11 @@ function renderCapture() {
   const asset = ASSIGNMENTS.find(a => a.id === state.currentAssetId);
   const d = state.draft;
   const shotLabel = asset.shots[d.shotIndex];
-  const gpsText = d.gps ? `📍 ${d.gps.lat.toFixed(4)}, ${d.gps.lon.toFixed(4)}` : (d.gpsError ? '📍 unavailable' : '📍 locating…');
+  const gpsText = d.gps
+    ? (d.gpsSource === 'site'
+        ? `📍 ${asset.site}`
+        : `📍 ${d.gps.lat.toFixed(4)}, ${d.gps.lon.toFixed(4)}`)
+    : '📍 locating…';
   const timeText = d.time ? `🕒 ${d.time.toLocaleString()}` : '🕒 —';
 
   screenEl.innerHTML = `
@@ -648,7 +676,7 @@ function renderCapture() {
       <span class="muted">${d.photos.length + 1} of ${asset.shots.length} photos</span>
     </div>
 
-    ${d.gpsError ? `<div class="note-box note-error">⚠️ ${d.gpsError}</div>` : ''}
+    ${d.gpsSource === 'site' ? `<div class="note-box note-warn">📍 Device GPS wasn't available in this browser, so photos are being stamped with the registered site location for ${asset.site}.</div>` : ''}
     ${state.resubmitBanner ? `<div class="note-box note-error">${state.resubmitBanner}</div>` : ''}
 
     <div class="camera-wrap" id="camWrap">
@@ -664,7 +692,7 @@ function renderCapture() {
     ${serialNote(d, asset)}
 
     <button class="shutter" id="shutterBtn" ${(!d.serialOk || !d.gps) ? 'disabled' : ''}></button>
-    <p class="sub" style="text-align:center;margin-top:8px;">${!d.gps ? 'Waiting for GPS…' : (!d.serialOk ? 'Enter a matching serial number to unlock the shutter' : '')}</p>
+    <p class="sub" style="text-align:center;margin-top:8px;">${!d.gps ? 'Getting location…' : (!d.serialOk ? 'Enter a matching serial number to unlock the shutter' : '')}</p>
   `;
 
   // camera — reuse the existing stream if we already have one (don't re-request on every render)
@@ -735,7 +763,7 @@ function renderReview() {
   const asset = ASSIGNMENTS.find(a => a.id === state.currentAssetId);
   const d = state.draft;
   const thumbs = d.photos.map(p => `<div class="thumb"><img src="${p.dataUrl}"><span class="lock">🔒</span></div>`).join('');
-  const conditionItems = ['Bodywork', 'Tyres/tracks', 'Glass/mirrors'];
+  const conditionItems = CONDITION_ITEMS;
 
   screenEl.innerHTML = `
     <button class="backlink" id="backLink">← ${asset.name}</button>
@@ -791,7 +819,7 @@ function renderSummary() {
       <b style="font-size:13px;">${asset.name}</b>
       <div class="meta-line"><span>Serial / VIN</span><b>${d.serial} ✓</b></div>
       <div class="meta-line"><span>Agreement on file</span><b>${asset.agreement}</b></div>
-      <div class="meta-line"><span>Location</span><b>${d.gps ? d.gps.lat.toFixed(4)+', '+d.gps.lon.toFixed(4) : '—'}</b></div>
+      <div class="meta-line"><span>Location</span><b>${d.gps ? d.gps.lat.toFixed(4)+', '+d.gps.lon.toFixed(4) + (d.gpsSource === 'site' ? ' (site)' : '') : '—'}</b></div>
       <div class="meta-line"><span>Captured</span><b>${d.time ? d.time.toLocaleString() : '—'}</b></div>
       <div class="meta-line"><span>Photos</span><b>${d.photos.length} attached</b></div>
       <div class="meta-line" style="border-bottom:none;"><span>Condition</span><b>${conditionSummary}</b></div>
@@ -828,7 +856,7 @@ function renderConfirmation() {
 
 function renderResubmit() {
   const asset = ASSIGNMENTS.find(a => a.id === state.currentAssetId);
-  state.draft = { serial: '', serialOk: false, gps: null, gpsError: null, time: null, photos: [], shotIndex: 0, condition: {}, notes: '' };
+  state.draft = { serial: '', serialOk: false, gps: null, gpsSource: null, time: null, photos: [], shotIndex: 0, condition: defaultCondition(), notes: '' };
   state.resubmitBanner = `🚩 Flagged: ${asset.flagReason}. Retake this photo — everything else on file stays as-is.`;
   go('capture', { currentAssetId: asset.id });
   requestGPS();
